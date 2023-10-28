@@ -548,3 +548,37 @@ View(DB25)
 
 write.csv(DB25, "DBes3.csv", row.names = FALSE)
 
+#Revisamos la base de datos homogenizada
+
+cantidad_na <- sapply(DB25, function(x) sum(is.na(x)))
+cantidad_na <- data.frame(cantidad_na)
+porcentaje_na <- cantidad_na/nrow(DB25)
+porcentaje_na <-porcentaje_na*100
+porcentaje_na
+
+#Eliminamos variables con NA para limpiar matriz
+
+DB25 <- DB25 %>%
+  select(-surface_total)
+
+DB25 <- DB25 %>%
+  select(-rooms)
+
+#Para guardar la base de datos
+
+View(DB25)
+
+write.csv(DB25, "DBes4.csv", row.names = FALSE)
+
+#Volvemos a dividir nuestras bases por entrenamiento:
+
+BTRAIN<- DB25[DB25$base=="train",]
+BTEST<- DB25[DB25$base=="test",]
+
+#La base de datos de entrenamiento (BTRAIN) cuenta con 8560 observaciones.
+#La base de datos de testeo (BTEST) cuenta con 2827 observaciones
+
+#Guardar TRAIN y TEST#
+
+write.csv(BTRAIN, "BTRAINL.csv", row.names = FALSE)
+write.csv(BTEST, "BTEST.csv", row.names = FALSE)

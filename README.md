@@ -582,3 +582,452 @@ BTEST<- DB25[DB25$base=="test",]
 
 write.csv(BTRAIN, "BTRAINL.csv", row.names = FALSE)
 write.csv(BTEST, "BTEST.csv", row.names = FALSE)
+
+##CREAMOS PREDICCION##
+
+#incluir librerias
+install.packages("pacman")
+library(pacman) 
+p_load(caret, 
+       Matrix,
+       recipes,
+       rio, 
+       tidyverse,
+       glmnet,
+       dplyr,
+       readr,
+       gamlr,
+       tidymodels,
+       ggplot2,
+       scales,
+       rvest,
+       caret,
+       stringr,
+       boot,
+       caret,
+       modeest,
+       stargazer,
+       sf,
+       leaflet,
+       tmaptools,
+       class,
+       rgeos,
+       nngeo,
+       osmdata,
+       randomForest,
+       xgboost,
+       nnls,
+       data.table,
+       ranger, SuperLearner, caret)
+require("tidyverse")
+library(tidymodels)
+
+#definimos directorio
+
+setwd("C:/Users/ncoro/Desktop/2023/BML/taller 2.1")
+
+BTEST_P <- read.csv("BTEST.csv")
+
+BTRAIN_P <- read.csv("BTRAINL.csv")
+  
+
+#Se elimina la columna de precio en la base Btest_P
+
+BTEST_P<-BTEST_P%>% mutate(price = NULL)
+
+#para las varibales "property_type" se vuelve dummy, donde 1 = Aparatamneto, 0 = Casa
+
+BTEST_P<-BTEST_P%>% mutate(Apto = ifelse(property_type=="Apartamento", 1,0))
+BTRAIN_P<-BTRAIN_P%>% mutate(Apto = ifelse(property_type=="Apartamento", 1,0))
+
+#Modelo 1 OLS
+
+MD1 <- lm(price ~ factor(Apto) + factor(distancia_parque) + factor(distancia_Bar) + WC+bedrooms+area+distancia_Pbus+distancia_AV, data =BTRAIN_P)
+
+predicciones_MD1 <- predict(MD1, newdata = BTRAIN_P)
+Diferencia_MD1 <- (predicciones_MD1 - BTRAIN_P$price)
+Diferencia_MD1<-data.frame(Diferencia_MD1)
+MSE_MD1<- sqrt(mean((predicciones_MD1 - BTRAIN_P$price)^2))
+
+require(stargazer)
+stargazer(MD1)
+
+view(MSE_MD1)
+
+#Modelo 2 LASO
+
+x_train <- model.matrix(price ~ factor(Apto) + factor(distancia_parque) + factor(distancia_Bar) + WC+bedrooms+area+distancia_Pbus+distancia_AV, data =BTRAIN_P)[, -1]
+y_train <- BTRAIN_P$price
+
+MD2lass_f <- glmnet(
+  x           = x_train,
+  y           = y_train,
+  alpha       = 1,
+  nlambda     = 200,
+  standardize = TRUE
+)
+
+set.seed(10101)
+cv_error_MD2Lass_f <- cv.glmnet(
+  x      = x_train,
+  y      = y_train,
+  alpha  = 1,
+  nfolds = 10,
+  type.measure = "mse",
+  standardize  = TRUE
+)
+
+
+MD2_Lasso_f <- glmnet(
+  x           = x_train,
+  y           = y_train,
+  alpha       = 1,
+  lambda      = cv_error_MD2Lass_f$lambda.1se,
+  standardize = TRUE
+)
+
+predicciones_train_mod2_Lass_f <- predict(MD2_Lasso_f, newx = x_train)
+MSE_MD2 <- sqrt(mean((predicciones_train_mod2_Lass_f -y_train)^2))
+Diferencia_MD2 <- (predicciones_train_mod2_Lass_f - BTRAIN_P$price)
+Diferencia_MD2<-data.frame(Diferencia_MD2)
+
+
+#Modelo 3 Random Forest
+
+set.seed(10101)
+
+MD3_forest <- ranger(price ~ Apto + distancia_parque + distancia_Bar + WC+bedrooms+area+distancia_Pbus+distancia_AV,
+  data = BTRAIN_P,
+  num.trees = 5,
+  write.forest = TRUE #Para calcular la prediccón
+)
+
+MD3_forest_ <- randomForest(
+  price ~ Apto + distancia_parque + distancia_Bar + WC+bedrooms+area+distancia_Pbus+distancia_AV,
+  data = BTRAIN_P,
+  num.trees = 5,
+  write.forest = TRUE #Para obtener las variables importantes
+)
+
+varImp(MD3_forest_,scale=TRUE)
+
+predicciones_MD3_rf_completo<-predict(MD3_forest, data = BTRAIN_P)$predictions
+
+MSE_MD3 <- sqrt(mean((predicciones_MD3_rf_completo-BTRAIN_P$price)^2))
+Diferencia_MD3 <- (predicciones_MD3_rf_completo - BTRAIN_P$price)
+Diferencia_MD3<-data.frame(Diferencia_MD3)
+
+#Modelo 4 XGBoost
+
+xgb_train <- xgb.DMatrix(data = x_train, label = y_train)
+xgb_test <- xgb.DMatrix(data = x_train, label = y_train) # xgb_test como la misma base train
+
+watchlist <-list(train=xgb_train, test=xgb_test)
+
+MD4<- xgb.train(data = xgb_train, max.depth = 3, watchlist=watchlist, nrounds = 100)
+
+summary(MD4)
+predicciones_MD4 <-predict(MD4, xgb_test) # xgb_test corresponde a la misma base train
+
+MSE_MD4 <- sqrt(mean((predicciones_MD4-BTRAIN_P$price)^2))
+Diferencia_MD4 <- (predicciones_MD4 - BTRAIN_P$price)
+Diferencia_MD4<-data.frame(Diferencia_MD4)
+
+### Clasificación ###
+
+Precio_compra_MD1<-ifelse(Diferencia_MD1<=-40000000,0, predicciones_MD1)
+Precio_compra_MD1<-data.frame(Precio_compra_MD1)
+Precio_tot_MD1<-colSums(Precio_compra_MD1)
+view(Precio_tot_MD1)
+Zeros_MD1<-ifelse(Precio_compra_MD1==0,TRUE, FALSE)
+table(Zeros_MD1)
+
+
+#Modelo OLS para variables relevantes del ejercicio anterior en RF (6 variables)
+
+MD1C <- lm(price ~  distancia_Bar+WC+bedrooms+area+distancia_Pbus+distancia_AV, data =BTRAIN_P)
+
+predicciones_MD1C <- predict(MD1C, newdata = BTRAIN_P)
+Diferencia_MD1C <- (predicciones_MD1C - BTRAIN_P$price)
+Diferencia_MD1C<-data.frame(Diferencia_MD1C)
+MSE_MD1C<- sqrt(mean((predicciones_MD1C - BTRAIN_P$price)^2))
+
+
+#Modelo 2C LASSO
+
+x_trainb <- model.matrix(price ~distancia_Bar + WC+bedrooms+area+distancia_Pbus+distancia_AV, data =BTRAIN_P)[, -1]
+y_trainb <- BTRAIN_P$price
+
+MD2Class_fb <- glmnet(
+  x           = x_trainb,
+  y           = y_trainb,
+  alpha       = 1,
+  nlambda     = 200,
+  standardize = TRUE
+)
+
+set.seed(10101)
+cv_error_MD2_Lass_fb <- cv.glmnet(
+  x      = x_trainb,
+  y      = y_trainb,
+  alpha  = 1,
+  nfolds = 10,
+  type.measure = "mse",
+  standardize  = TRUE
+)
+
+
+MD2_Lasso_fb <- glmnet(
+  x           = x_trainb,
+  y           = y_trainb,
+  alpha       = 1,
+  lambda      = cv_error_MD2_Lass_fb$lambda.1se,
+  standardize = TRUE
+)
+
+predicciones_train_MD2_Lass_fb <- predict(MD2_Lasso_fb, newx = x_trainb)
+MSE_MD2C <- sqrt(mean((predicciones_train_MD2_Lass_fb -y_trainb)^2))
+Diferencia_MD2C <- (predicciones_train_MD2_Lass_fb - BTRAIN_P$price)
+Diferencia_MD2C<-data.frame(Diferencia_MD2C)
+
+#Modelo 3C Random Forest
+
+set.seed(10101)
+
+
+MD3_forestC <- ranger(
+  price ~ distancia_Bar + WC+bedrooms+area+distancia_Pbus+distancia_AV,
+  data = BTRAIN_P,
+  num.trees = 5,
+  write.forest = TRUE
+)
+
+
+
+predicciones_MD3_rf_completo<-predict(MD3_forestC, data = BTRAIN_P)$predictions
+
+MSE_MD3C <- sqrt(mean((predicciones_MD3_rf_completo-BTRAIN_P$price)^2))
+Diferencia_MD3C <- (predicciones_MD3_rf_completo - BTRAIN_P$price)
+Diferencia_MD3C<-data.frame(Diferencia_MD3C)
+
+#Modelo 4C XGBoost
+
+xgb_trainb <- xgb.DMatrix(data = x_trainb, label = y_trainb)
+xgb_testb <- xgb.DMatrix(data = x_trainb, label = y_trainb)
+
+watchlistC <-list(train=xgb_trainb, test=xgb_testb)
+
+MD4C<- xgb.train(data = xgb_trainb, max.depth = 3, watchlist=watchlistC, nrounds = 100)
+
+summary(MD4C)
+predicciones_MD4C <-predict(MD4C, xgb_testb)
+
+MSE_MD4C <- sqrt(mean((predicciones_MD4C-BTRAIN_P$price)^2))
+Diferencia_MD4C <- (predicciones_MD4C - BTRAIN_P$price)
+Diferencia_MD4C<-data.frame(Diferencia_MD4C)
+
+### Clasificación  de modelos por evaluación de compra
+
+Precio_compra_MD1C<-ifelse(Diferencia_MD1C<=-40000000,0, predicciones_MD1C)
+Precio_compra_MD1C<-data.frame(Precio_compra_MD1C)
+Precio_tot_MD1C<-colSums(Precio_compra_MD1C)
+view(Precio_tot_MD1C)
+Zeros_MD1C<-ifelse(Precio_compra_MD1C==0,TRUE, FALSE)
+table(Zeros_MD1C)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+Precio_compra_MD2C<-ifelse(Diferencia_MD2C<=-40000000,0, predicciones_train_MD2_Lass_fb )
+Precio_compra_MD2C<-data.frame(Precio_compra_MD2C)
+Precio_tot_MD2C<-colSums(Precio_compra_MD2C)
+view(Precio_tot_MD2C)
+Zeros_MD2C<-ifelse(Precio_compra_MD2C==0,TRUE, FALSE)
+table(Zeros_MD2C)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+Precio_compra_MD3C<-ifelse(Diferencia_MD3C<=-40000000,0, predicciones_MD3_rf_completo)
+Precio_compra_MD3C<-data.frame(Precio_compra_MD3C)
+Precio_tot_MD3C<-colSums(Precio_compra_MD3C)
+view(Precio_tot_MD3C)
+Zeros_MD3C<-ifelse(Precio_compra_MD3C==0,TRUE, FALSE)
+table(Zeros_MD3C)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+Precio_compra_MD4C<-ifelse(Diferencia_MD4C<=-40000000,0, predicciones_MD4C  )
+Precio_compra_MD4C<-data.frame(Precio_compra_MD4C)
+Precio_tot_MD4C<-colSums(Precio_compra_MD4C)
+view(Precio_tot_MD4C)
+Zeros_MD4C<-ifelse(Precio_compra_MD4C==0,TRUE, FALSE)
+table(Zeros_MD4C)
+
+
+#Modelos con 5 variables
+
+#OLS 1.2
+
+MD12 <- lm(price ~  WC+bedrooms+area+distancia_Pbus+distancia_AV, data =BTRAIN_P)
+
+predicciones_MD12 <- predict(MD12, newdata = BTRAIN_P)
+Diferencia_MD12 <- (predicciones_MD12 - BTRAIN_P$price)
+Diferencia_MD12<-data.frame(Diferencia_MD12)
+MSE_MD12<- sqrt(mean((predicciones_MD12 - BTRAIN_P$price)^2))
+
+
+#Lasso 2.1
+
+x_trainc <- model.matrix(price ~WC+bedrooms+area+distancia_Pbus+distancia_AV, data =BTRAIN_P)[, -1]
+y_trainc <- BTRAIN_P$price
+
+MD2Class_fc <- glmnet(
+  x           = x_trainc,
+  y           = y_trainc,
+  alpha       = 1,
+  nlambda     = 200,
+  standardize = TRUE
+)
+
+set.seed(10101)
+cv_error_MD2_Lass_fc <- cv.glmnet(
+  x      = x_trainc,
+  y      = y_trainc,
+  alpha  = 1,
+  nfolds = 10,
+  type.measure = "mse",
+  standardize  = TRUE
+)
+
+
+MD2_Lasso_fc <- glmnet(
+  x           = x_trainc,
+  y           = y_trainc,
+  alpha       = 1,
+  lambda      = cv_error_MD2_Lass_fc$lambda.1se,
+  standardize = TRUE
+)
+
+predicciones_train_MD2_Lass_fc <- predict(MD2_Lasso_fc, newx = x_trainc)
+MSE_MD21 <- sqrt(mean((predicciones_train_MD2_Lass_fc -y_trainc)^2))
+Diferencia_MD21 <- (predicciones_train_MD2_Lass_fc - BTRAIN_P$price)
+Diferencia_MD21<-data.frame(Diferencia_MD21)
+
+#Random Forest 3.1
+
+set.seed(10101)
+
+
+MD3_forestc <- ranger(
+  price ~ WC+bedrooms+area+distancia_Pbus+distancia_AV,
+  data = BTRAIN_P,
+  num.trees = 5,
+  write.forest = TRUE
+)
+
+
+
+predicciones_MD3_rf_completoc<-predict(MD3_forestc, data = BTRAIN_P)$predictions
+
+MSE_MD31 <- sqrt(mean((predicciones_MD3_rf_completoc-BTRAIN_P$price)^2))
+Diferencia_MD31 <- (predicciones_MD3_rf_completoc - BTRAIN_P$price)
+Diferencia_MD31<-data.frame(Diferencia_MD31)
+
+#XGBoost 4.1
+
+xgb_trainc <- xgb.DMatrix(data = x_trainc, label = y_trainc)
+xgb_testc <- xgb.DMatrix(data = x_trainc, label = y_trainc)
+
+watchlistc <-list(train=xgb_trainc, test=xgb_testc)
+
+MD41<- xgb.train(data = xgb_trainc, max.depth = 3, watchlist=watchlistc, nrounds = 100)
+
+summary(MD41)
+predicciones_MD41 <-predict(MD41, xgb_testc)
+
+MSE_MD41 <- sqrt(mean((predicciones_MD41-BTRAIN_P$price)^2))
+Diferencia_MD41 <- (predicciones_MD41 - BTRAIN_P$price)
+Diferencia_MD41<-data.frame(Diferencia_MD41)
+
+### Clasificación  de modelos por evaluación de compra
+
+Precio_compra_MD12<-ifelse(Diferencia_MD12<=-40000000,0, predicciones_MD12)
+Precio_compra_MD12<-data.frame(Precio_compra_MD12)
+Precio_tot_MD12<-colSums(Precio_compra_MD12)
+view(Precio_tot_MD12)
+Zeros_MD12<-ifelse(Precio_compra_MD12==0,TRUE, FALSE)
+table(Zeros_MD12)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+Precio_compra_MD21<-ifelse(Diferencia_MD21<=-40000000,0, predicciones_train_mod2_Lass_fc )
+Precio_compra_MD21<-data.frame(Precio_compra_MD21)
+Precio_tot_MD21<-colSums(Precio_compra_MD21)
+view(Precio_tot_MD21)
+Zeros_MD21<-ifelse(Precio_compra_MD21==0,TRUE, FALSE)
+table(Zeros_MD21)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+Precio_compra_MD31<-ifelse(Diferencia_MD31<=-40000000,0, predicciones_MD3_rf_completoc  )
+Precio_compra_MD31<-data.frame(Precio_compra_MD31)
+Precio_tot_MD31<-colSums(Precio_compra_MD31)
+view(Precio_tot_MD31)
+Zeros_MD31<-ifelse(Precio_compra_MD31==0,TRUE, FALSE)
+table(Zeros_MD31)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+Precio_compra_MD41<-ifelse(Diferencia_MD41<=-40000000,0, predicciones_MD41  )
+Precio_compra_MD41<-data.frame(Precio_compra_MD41)
+Precio_tot_MD41<-colSums(Precio_compra_MD41)
+view(Precio_tot_MD41)
+Zeros_MD41<-ifelse(Precio_compra_MD41==0,TRUE, FALSE)
+table(Zeros_MD41) #La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+#===========================================================================================
+#Gráfica de MSE
+
+RMSE_modelos<-c(MSE_MD1, MSE_MD2, MSE_MD3, MSE_MD4)
+modelos_<-c('modelo1_10var','modelo2_10var', 'MD3_10var', 'modelo4_10var')
+RMSE_errores<-data.frame(modelos_,RMSE_modelos)
+
+#Se grafica el resultado
+ggplot(data=RMSE_errores, aes(x = modelos_, y = RMSE_modelos, group=1)) + 
+  geom_line()+   geom_point()+  labs(title = "Comparación diferentes modelos en términos de RMSE") 
+
+#===========================================================================================
+#Se entrena el modelo 3 con las 8 variables. Se realizaron varias iteraciones y se determinó que el número de árboles con el que se obtiene el menor RMSE es 1000, así como menor valor y mayor cantidad de viviendas compradas.
+
+
+
+set.seed(10101)
+MD3_forest1000 <- ranger(price ~ Apto + distancia_parque + distancia_Bar + WC+bedrooms+area+distancia_Pbus+distancia_AV,
+  data = BTRAIN_P,
+  num.trees = 1000,
+  write.forest = TRUE
+)
+
+predicciones_MD3_rf_completo1000<-predict(MD3_forest1000, data = BTRAIN_P)$predictions
+
+MSE_MD31000 <- sqrt(mean((predicciones_MD3_rf_completo1000-BTRAIN_P$price)^2))
+Diferencia_MD31000 <- (predicciones_MD3_rf_completo1000 - BTRAIN_P$price)
+Diferencia_MD31000<-data.frame(Diferencia_MD31000)
+
+Precio_compra_MD31000<-ifelse(Diferencia_MD31000<=-40000000,0, predicciones_MD3_rf_completo1000  )
+Precio_compra_MD31000<-data.frame(Precio_compra_MD31000)
+Precio_tot_MD31000<-colSums(Precio_compra_MD31000)
+view(Precio_tot_MD31000)
+Zeros_MD31000<-ifelse(Precio_compra_MD31000==0,TRUE, FALSE)
+table(Zeros_MD31000)#La cantidad de falsos (diferente de cero) son las propiedades compradas
+
+#De acuerdo a la comparación de los modelos, el modelo MD3_forest con 8 ariables explicativas es el cual tiene la mejor proporción de dinero invertido/viviendas comparas. 
+#Por lo tanto, Se realiza la predicción con el modelo MD3_forest en la base BTEST_P 
+
+Predicciones_Precios1 <- predict(MD3_forest1000,  data = BTEST_P)$predictions #Se realiza predicción sobre la base Test con el modelo RF de 1000 árboles
+Predicciones_Precios1 <- data.frame (Predicciones_Precios1)
+View(Predicciones_Precios1)
+Predicciones_Precios1 <- cbind(BTEST_P$property_id ,Predicciones_Precios1)
+View(Predicciones_Precios1)
+View(cbind(BTEST_P$property_id, Predicciones_Precios1$`BTEST_P$property_id`))
+
+summary(Predicciones_Precios1)
+colnames(Predicciones_Precios1) <- c('property_id','price') #Se renombran las columnas
+
+DTEST <- read.csv("test.csv")
+
+Property_id_o2<-DTEST$property_id #Se importa el id con el orden original de la base Test entregada por Ignacio
+Property_id_o2<- data.frame (Property_id_o2)
+colnames(Property_id_o2) <- c('property_id') #Se renombran las columnas
+
+Property_id_o2<-left_join(Property_id_o2, Predicciones_Precios1, by="property_id" ) #Se hace left join para que los resultados queden con el mismo orden de la base test original
+colnames(Property_id_o2) <- c('property_id','price') #Se renombran las columnas
+
+write.csv (Property_id_or, "../Taller 2.1/predictions_norozc5.csv") #Submission file

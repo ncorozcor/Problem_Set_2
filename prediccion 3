@@ -1,0 +1,42 @@
+require("pacman")
+
+p_load("rpart", "ranger")
+p_load("tidyverse", #data wrangling
+       "modeldata", # package with the housing data from Ames, Iowa
+       "vtable", #descriptive stats package
+       "stargazer", #tidy regression results,
+       "sf", #handling spatial data
+       "spatialsample") #spatial CV
+p_load("caret")
+
+train <- read.csv("/Users/mariacamilapinillos/Desktop/Universidad/Maestría/Primer semestre /Big data and learning machine /TRAIN.csv")
+
+test <- read.csv("/Users/mariacamilapinillos/Desktop/Universidad/Maestría/Primer semestre /Big data and learning machine /testcompleto.csv")
+
+
+##
+fitControl1<-trainControl(method ="cv",
+                          number=5) #cantidad de divisiones cross-validation
+##
+#####Boosting
+
+set.seed(69)
+p_load("bst")
+
+boosted <- train(
+  price~surface_total+bedrooms+numeros_baños+estrato+v_ref+distancia_u_top+distancia_bar+distancia_disco+distancia_w,
+  data=train,
+  method = "bstTree",
+  trControl = fitControl1,
+  tuneGrid=expand.grid(
+    mstop = c(300), 
+    maxdepth = c(3), 
+    nu = c(0.001)) 
+)
+
+test$price <- predict(boosted, newdata = test)
+
+prediccion9 <- test[, c("property_id", "price")]
+
+
+write.csv(prediccion9, "predict9.csv", row.names = F)

@@ -1,5 +1,5 @@
 
-##################################Arreglar base de entrenamiento (meter variables de distancias, estrato y ref catastral
+###Arreglar base de entrenamiento (meter variables de distancias, estrato y ref catastral###
 
 require("pacman")
 p_load("tidyverse", 

@@ -1,6 +1,8 @@
 # Problem_Set_2
 En el siguiente enlace se encuentra el desarrollo de la limpieza, homgenización y analisis de los datos de vivienda de la ciudad de Bogota, por parte del Equipo 11 
 
+Es importante precisar que se trabajaron dos formas de limpieza, homogenización y analisis, pero de acuerdo a los resultados de Kaggel se tomo la base de datos que se encuentra en el archivo "codigo depuracion datos.txt"
+
 #Instalamos paquetes y librerias##
 
 install.packages("pacman") 

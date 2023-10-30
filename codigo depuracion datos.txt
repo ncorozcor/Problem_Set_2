@@ -1,0 +1,676 @@
+
+##################################Arreglar base de entrenamiento (meter variables de distancias, estrato y ref catastral
+
+require("pacman")
+p_load("tidyverse", 
+       "vtable", 
+       "stargazer", 
+       "sf", 
+       "spatialsample",
+       "osmdata",
+       "leaflet",
+       "sf")
+
+
+####Agregar informacion de estrato a os inmuebles####
+setwd("C:/Users/alfag/OneDrive - Universidad de los Andes/Machine learning/taller 2/estrato")
+
+datos_estrato <- st_read("estrato-socioeconomico-bogota-2019.shp")
+
+estrato <- datos_estrato %>% select(estrato, shape_area, shape_len, geometry)
+inmuebles <- read.csv("area_baños.csv")
+
+
+##manejar todo con la misma proyeccion#
+st_crs(datos_estrato)
+
+inmueblesf <- st_as_sf(inmuebles, 
+                       coords = c("lon", "lat"), 
+                       crs = 4326)
+#eliminar estrato cero#
+
+estrato <- estrato %>%
+  mutate(estrato = ifelse(estrato == "0", NA, estrato))
+
+##unir#
+inmuebles_estrato <- st_join(inmueblesf, estrato)
+
+##rellenar NAs con el estrato del poligono mas cercano#
+
+manzana_cerca <- st_nearest_feature(inmuebles_estrato, estrato)
+
+inmuebles_estrato$estrato[is.na(inmuebles_estrato$estrato)] <- estrato$estrato[manzana_cerca]
+
+
+
+inmuebles_estrato <- select(inmuebles_estrato, -shape_area, -shape_len)
+
+#eliminar 722 obs con NA en estrato#
+inmuebles_estrato <- drop_na(inmuebles_estrato, estrato)
+
+
+
+####Agregar informacion de valor de referencia por manzana catastral####
+
+ref_catastral <- st_read("valor-de-referencia-por-manzana-catastral.shp")
+st_crs(ref_catastral)
+
+ref_catastral <- select(ref_catastral, -objectid, -ano, -shape_area, -shape_len, -mancodigo)
+
+inmuebles_estrato_uso_catastro <- st_join(inmuebles_estrato_uso, ref_catastral)
+
+##completar info con uso de manzana mas cercana#
+
+inmuebles_estrato_uso_catastro$v_ref[is.na(inmuebles_estrato_uso_catastro$v_ref)] <- ref_catastral$v_ref[manzana_cerca]
+
+####
+
+#eliminar deplicados de inmuebles que se les asignó mas de un valor catastral#
+
+duplicados <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  filter(n() > 1)  
+
+# Mantener el duplicado con el mayor 'ref_catastral' en los grupos con duplicados
+
+inmuebles_estrato_uso_catastro <- as.data.frame(inmuebles_estrato_uso_catastro)
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>%
+  mutate(v_ref = as.numeric(v_ref))
+
+
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  mutate(max_v_ref = max(v_ref)) %>%
+  filter(n() == 1 | (n() > 1 & v_ref == max_v_ref))
+
+# Desagrupar el DataFrame resultante
+inmuebles_estrato_uso_catastro <- ungroup(inmuebles_estrato_uso_catastro)
+
+# Eliminar la columna temporal 'max_ref_catastral'
+inmuebles_estrato_uso_catastro <- select(inmuebles_estrato_uso_catastro, -max_v_ref)
+
+#eliminar duplicados#
+duplicados_v_ref <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  filter(n() > 1)  
+
+# Mantener solo la primera observación de cada grupo 'v_ref'
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  slice(1)  
+
+# Desagrupar el DataFrame resultante
+inmuebles_estrato_uso_catastro <- ungroup(inmuebles_estrato_uso_catastro)
+
+
+####
+
+#eliminar 280 observaciones sin info de ref catastral#
+inmuebles_estrato_uso_catastro <- drop_na(inmuebles_estrato_uso_catastro, v_ref)
+
+inmuebles_estrato_uso_catastro <- select(inmuebles_estrato_uso_catastro, -mancodigo)
+
+inmuebles_estrato_uso_catastro <- st_as_sf(inmuebles_estrato_uso_catastro, 
+                       crs = 4326)
+
+write.csv(inmuebles_estrato_uso_catastro, "estrato_uso_catastro.csv", row.names = F)
+
+################################
+
+####Crear variable de cercania a mejores universidades##
+
+# Definir la caja de Bogotá
+bogota_bbox <- getbb("Bogotá, Colombia")
+
+# Descargar datos de las universidades en Bogotá
+universidades <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "university") %>%
+  osmdata_sf()
+
+#crear objeto con info de poligonos y multipoligonos#
+
+los_mpoligonos <- st_as_sf(universidades$osm_multipolygons)
+los_mpoligonos <- st_transform(los_mpoligonos, st_crs(4326))
+los_mpoligonos <- select(los_mpoligonos, osm_id, name, geometry)
+
+
+los_poligonos <- st_as_sf(universidades$osm_polygons)
+los_poligonos <- st_transform(los_poligonos, st_crs(4326))
+los_poligonos <- select(los_poligonos, osm_id, name, geometry)
+
+#combinar info#
+
+combined <- rbind(los_poligonos, los_mpoligonos)
+
+#Mantener solo las universidades relevantes#
+
+u_importantes <- c("Pontificia Universidad Javeriana", "EAN", "Uniminuto",
+                   "Universidad de La Salle, Sede Norte",
+                   "Universidad El Bosque",
+                   "Universidad Distrital Sede Tecnológica",
+                   "Universidad Distrital Francisco José de Caldas - Sede Vivero",
+                   "Universidad Distrital Sede Macarena A", "Universidad Distrital Sede Macarena B",
+                   "Universidad Pedagógica Nacional", "Universidad Nacional Abierta y a Distancia",
+                   "Universidad Antonio Nariño", "UAN Facultad de Ingenieria Mecanica",
+                   "Universidad de La Salle",
+                   "Universidad Santo Tomás", "Universidad Cooperativa", "Universidad Jorge Tadeo Lozano",
+                   "Universidad Sergio Arboleda",
+                   "Universidad cooperativa de Colombia", "Universidad Cooperativa",
+                   "Universidad de San Buenaventura",
+                   "Universidad Católica de Colombia Facultad Derecho", "Universidad Católica de Colombia",
+                   "Universidad Cooperativa de Colombia sede Norte", "Universidad de la Salle-Sede Centro",
+                   "Universidad Santo Tomas", "Universidad Católica de Colombia",
+                   "Universidad Catolica Facultad de Psicologia", "Universidad Central",
+                   "Universidad del Rosario", "Universidad Antonio Nariño", "Universidad Antonio Nariño",
+                   "Universidad del Rosario",
+                   "Universidad Distrital Francisco José de Caldas Sede El Porvenir",
+                   "Universidad Santo Tomás sede principal", "Universidad Libre",
+                   "Universidad Nacional de Colombia", "Universidad Externado de Colombia",
+                   "Universidad de los Andes")
+
+universidades_top <- combined %>%
+  filter(name %in% u_importantes)
+
+# Calcular los centroides de las universidades
+centroides <- st_centroid(universidades_top)
+coordenadass <- st_coordinates(centroides)
+coordenadass <- as.data.frame(coordenadass)
+
+#convertir a sf
+centroidesusf <- st_as_sf(coordenadass, coords = c("X", "Y"))
+#asignar CRS
+centroidesusf <- st_set_crs(centroidesusf, st_crs(4326))
+
+#calcular distancias
+
+distancia_uni_top <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroidesusf)
+
+dist_min_utop <- apply(distancia_uni_top, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_u_top = dist_min_utop)
+
+##################################
+
+###Crear variable de distancia al bar mas cerca###
+
+# Descargar datos de bares en Bogotá
+bares <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "bar") %>%
+  osmdata_sf()
+
+# Obtener las geometrías de bares
+bar_geometria <- bares$osm_points
+
+# Calcular los centroides de las universidades
+centroides_bar <- st_centroid(bar_geometria)
+coobar <- st_coordinates(centroides_bar)
+coobar <- as.data.frame(coobar)
+
+#convertir a sf
+centroides_barsf <- st_as_sf(coobar, coords = c("X", "Y"))
+#asignar CRS
+centroides_barsf <- st_set_crs(centroides_barsf, st_crs(4326))
+
+#calcular distancias
+
+distancia_bar <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroides_barsf)
+
+dist_min_bar <- apply(distancia_bar, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_bar = dist_min_bar)
+
+###################################
+
+###Crear variable de distancia a la discoteca mas cerca###
+
+# Descargar datos de disco en Bogotá
+disco <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "nightclub") %>%
+  osmdata_sf()
+
+# Obtener las geometrías de bares
+disco_geometria <- disco$osm_points
+
+# Calcular los centroides de las universidades
+centroides_disco <- st_centroid(disco_geometria)
+coodisco <- st_coordinates(centroides_disco)
+coodisco <- as.data.frame(coodisco)
+
+#convertir a sf
+centroides_discosf <- st_as_sf(coodisco, coords = c("X", "Y"))
+#asignar CRS
+centroides_discosf <- st_set_crs(centroides_discosf, st_crs(4326))
+
+#calcular distancias
+
+distancia_disco <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroides_discosf)
+
+dist_min_disco <- apply(distancia_disco, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_disco = dist_min_disco)
+
+##################
+
+###Crear variable de distancia al stripclub mas cerca###
+
+# Descargar datos 
+w <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "stripclub") %>%
+  osmdata_sf()
+
+# Obtener las geometrías de bares
+w_geometria <- w$osm_points
+
+# Calcular los centroides de las universidades
+centroides_w <- st_centroid(w_geometria)
+coow <- st_coordinates(centroides_w)
+coow <- as.data.frame(coow)
+
+#convertir a sf
+centroides_wsf <- st_as_sf(coow, coords = c("X", "Y"))
+#asignar CRS
+centroides_wsf <- st_set_crs(centroides_wsf, st_crs(4326))
+
+#calcular distancias
+
+distancia_w <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroides_wsf)
+
+dist_min_w <- apply(distancia_w, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_w = dist_min_w)
+
+st_write(inmuebles_estrato_uso_catastro, "TRAIN_GEOMETRIAS.shp")
+
+TRAIN <- st_drop_geometry(inmuebles_estrato_uso_catastro)
+
+TRAIN <- as.data.frame(TRAIN)
+
+write.csv(TRAIN, "TRAIN.csv", row.names = T)
+
+##############################################################
+##############################################################
+
+####################### Arreglar base de testeo (la  unica diferencia es que no se dropean datos)
+
+##Transformar base de testeo##
+
+
+setwd("C:/Users/alfag/OneDrive - Universidad de los Andes/Machine learning/taller 2/estrato")
+
+
+datos_estrato <- st_read("estrato-socioeconomico-bogota-2019.shp")
+
+estrato <- datos_estrato %>% select(estrato, shape_area, shape_len, geometry)
+inmuebles <- read.csv("C:/Users/alfag/OneDrive - Universidad de los Andes/Machine learning/taller 2/test_area.csv")
+
+
+
+
+##manejar todo con la misma proyeccion#
+st_crs(datos_estrato)
+
+inmueblesf <- st_as_sf(inmuebles, 
+                       coords = c("lon", "lat"), 
+                       crs = 4326)
+#eliminar estrato cero#
+
+estrato <- estrato %>%
+  mutate(estrato = ifelse(estrato == "0", NA, estrato))
+
+##unir#
+inmuebles_estrato <- st_join(inmueblesf, estrato)
+
+##rellenar NAs con el estrato del poligono mas cercano#
+
+manzana_cerca <- st_nearest_feature(inmuebles_estrato, estrato)
+
+inmuebles_estrato$estrato[is.na(inmuebles_estrato$estrato)] <- estrato$estrato[manzana_cerca]
+
+
+
+inmuebles_estrato <- select(inmuebles_estrato, -shape_area, -shape_len)
+
+
+
+
+####Agregar informacion del uso predominante de la manzana####
+
+uso_manzana <- st_read("uso-predominante-por-manzana-2020.shp")
+
+##manejar todo con la misma proyeccion#
+st_crs(uso_manzana)
+
+uso_manzana <- select(uso_manzana, -objectid, -ano, -shape_area, -shape_len)
+
+inmuebles_estrato_uso <- st_join(inmuebles_estrato, uso_manzana)
+
+##completar info con uso de manzana mas cercana#
+
+inmuebles_estrato_uso$uso[is.na(inmuebles_estrato_uso$uso)] <- uso_manzana$uso[manzana_cerca]
+
+
+###Agregar informacion de valor de referencia por manzana catastral###
+
+ref_catastral <- st_read("valor-de-referencia-por-manzana-catastral.shp")
+st_crs(ref_catastral)
+
+ref_catastral <- select(ref_catastral, -objectid, -ano, -shape_area, -shape_len, -mancodigo)
+
+inmuebles_estrato_uso_catastro <- st_join(inmuebles_estrato_uso, ref_catastral)
+
+##completar info con uso de manzana mas cercana#
+
+inmuebles_estrato_uso_catastro$v_ref[is.na(inmuebles_estrato_uso_catastro$v_ref)] <- ref_catastral$v_ref[manzana_cerca]
+
+####
+
+#eliminar deplicados de inmuebles que se les asignó mas de un valor catastral#
+
+duplicados <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  filter(n() > 1)  
+
+# Mantener el duplicado con el mayor 'ref_catastral' en los grupos con duplicados
+
+inmuebles_estrato_uso_catastro <- as.data.frame(inmuebles_estrato_uso_catastro)
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>%
+  mutate(v_ref = as.numeric(v_ref))
+
+
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  mutate(max_v_ref = max(v_ref)) %>%
+  filter(n() == 1 | (n() > 1 & v_ref == max_v_ref))
+
+# Desagrupar el DataFrame resultante
+inmuebles_estrato_uso_catastro <- ungroup(inmuebles_estrato_uso_catastro)
+
+# Eliminar la columna temporal 'max_ref_catastral'
+inmuebles_estrato_uso_catastro <- select(inmuebles_estrato_uso_catastro, -max_v_ref)
+
+#eliminar duplicados#
+duplicados_v_ref <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  filter(n() > 1)  
+
+# Mantener solo la primera observación de cada grupo 
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>%
+  group_by(property_id) %>%
+  slice(1)  
+
+# Desagrupar el DataFrame resultante
+inmuebles_estrato_uso_catastro <- ungroup(inmuebles_estrato_uso_catastro)
+
+
+####
+
+
+inmuebles_estrato_uso_catastro <- select(inmuebles_estrato_uso_catastro, -mancodigo)
+
+inmuebles_estrato_uso_catastro <- st_as_sf(inmuebles_estrato_uso_catastro, 
+                                           crs = 4326)
+
+write.csv(inmuebles_estrato_uso_catastro, "estrato_uso_catastro.csv", row.names = F)
+
+################################
+
+###Crear variable de cercania a mejores universidades##
+
+# Definir la caja de Bogotá
+bogota_bbox <- getbb("Bogotá, Colombia")
+
+# Descargar datos de las universidades en Bogotá
+universidades <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "university") %>%
+  osmdata_sf()
+
+#crear objeto con info de poligonos y multipoligonos#
+
+los_mpoligonos <- st_as_sf(universidades$osm_multipolygons)
+los_mpoligonos <- st_transform(los_mpoligonos, st_crs(4326))
+los_mpoligonos <- select(los_mpoligonos, osm_id, name, geometry)
+
+
+los_poligonos <- st_as_sf(universidades$osm_polygons)
+los_poligonos <- st_transform(los_poligonos, st_crs(4326))
+los_poligonos <- select(los_poligonos, osm_id, name, geometry)
+
+#combinar info#
+
+combined <- rbind(los_poligonos, los_mpoligonos)
+
+#Mantener solo las universidades relevantes#
+
+u_importantes <- c("Pontificia Universidad Javeriana", "EAN", "Uniminuto",
+                   "Universidad de La Salle, Sede Norte",
+                   "Universidad El Bosque",
+                   "Universidad Distrital Sede Tecnológica",
+                   "Universidad Distrital Francisco José de Caldas - Sede Vivero",
+                   "Universidad Distrital Sede Macarena A", "Universidad Distrital Sede Macarena B",
+                   "Universidad Pedagógica Nacional", "Universidad Nacional Abierta y a Distancia",
+                   "Universidad Antonio Nariño", "UAN Facultad de Ingenieria Mecanica",
+                   "Universidad de La Salle",
+                   "Universidad Santo Tomás", "Universidad Cooperativa", "Universidad Jorge Tadeo Lozano",
+                   "Universidad Sergio Arboleda",
+                   "Universidad cooperativa de Colombia", "Universidad Cooperativa",
+                   "Universidad de San Buenaventura",
+                   "Universidad Católica de Colombia Facultad Derecho", "Universidad Católica de Colombia",
+                   "Universidad Cooperativa de Colombia sede Norte", "Universidad de la Salle-Sede Centro",
+                   "Universidad Santo Tomas", "Universidad Católica de Colombia",
+                   "Universidad Catolica Facultad de Psicologia", "Universidad Central",
+                   "Universidad del Rosario", "Universidad Antonio Nariño", "Universidad Antonio Nariño",
+                   "Universidad del Rosario",
+                   "Universidad Distrital Francisco José de Caldas Sede El Porvenir",
+                   "Universidad Santo Tomás sede principal", "Universidad Libre",
+                   "Universidad Nacional de Colombia", "Universidad Externado de Colombia",
+                   "Universidad de los Andes")
+
+universidades_top <- combined %>%
+  filter(name %in% u_importantes)
+
+# Calcular los centroides de las universidades
+centroides <- st_centroid(universidades_top)
+coordenadass <- st_coordinates(centroides)
+coordenadass <- as.data.frame(coordenadass)
+
+#convertir a sf
+centroidesusf <- st_as_sf(coordenadass, coords = c("X", "Y"))
+#asignar CRS
+centroidesusf <- st_set_crs(centroidesusf, st_crs(4326))
+
+#calcular distancias
+
+distancia_uni_top <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroidesusf)
+
+dist_min_utop <- apply(distancia_uni_top, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_u_top = dist_min_utop)
+
+##################################
+
+###Crear variable de distancia al bar mas cerca###
+
+# Descargar datos de bares en Bogotá
+bares <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "bar") %>%
+  osmdata_sf()
+
+# Obtener las geometrías de bares
+bar_geometria <- bares$osm_points
+
+# Calcular los centroides de las universidades
+centroides_bar <- st_centroid(bar_geometria)
+coobar <- st_coordinates(centroides_bar)
+coobar <- as.data.frame(coobar)
+
+#convertir a sf
+centroides_barsf <- st_as_sf(coobar, coords = c("X", "Y"))
+#asignar CRS
+centroides_barsf <- st_set_crs(centroides_barsf, st_crs(4326))
+
+#calcular distancias
+
+distancia_bar <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroides_barsf)
+
+dist_min_bar <- apply(distancia_bar, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_bar = dist_min_bar)
+
+###################################
+
+###Crear variable de distancia a la discoteca mas cerca###
+
+# Descargar datos de disco en Bogotá
+disco <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "nightclub") %>%
+  osmdata_sf()
+
+# Obtener las geometrías de bares
+disco_geometria <- disco$osm_points
+
+# Calcular los centroides de las universidades
+centroides_disco <- st_centroid(disco_geometria)
+coodisco <- st_coordinates(centroides_disco)
+coodisco <- as.data.frame(coodisco)
+
+#convertir a sf
+centroides_discosf <- st_as_sf(coodisco, coords = c("X", "Y"))
+#asignar CRS
+centroides_discosf <- st_set_crs(centroides_discosf, st_crs(4326))
+
+#calcular distancias
+
+distancia_disco <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroides_discosf)
+
+dist_min_disco <- apply(distancia_disco, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_disco = dist_min_disco)
+
+##################
+
+###Crear variable de distancia al stripclub mas cerca###
+
+# Descargar datos 
+w <- opq(bbox = bogota_bbox) %>% 
+  add_osm_feature(key = "amenity", value = "stripclub") %>%
+  osmdata_sf()
+
+# Obtener las geometrías de bares
+w_geometria <- w$osm_points
+
+# Calcular los centroides de las universidades
+centroides_w <- st_centroid(w_geometria)
+coow <- st_coordinates(centroides_w)
+coow <- as.data.frame(coow)
+
+#convertir a sf
+centroides_wsf <- st_as_sf(coow, coords = c("X", "Y"))
+#asignar CRS
+centroides_wsf <- st_set_crs(centroides_wsf, st_crs(4326))
+
+#calcular distancias
+
+distancia_w <- st_distance(x = inmuebles_estrato_uso_catastro, y = centroides_wsf)
+
+dist_min_w <- apply(distancia_w, 1, min)
+#Agregar a base
+inmuebles_estrato_uso_catastro <- inmuebles_estrato_uso_catastro %>% mutate(distancia_w = dist_min_w)
+
+inmuebles_estrato_uso_catastro <- as.data.frame(inmuebles_estrato_uso_catastro)
+
+
+#####
+data <- 
+
+
+##normalizar texto##
+data <- inmuebles_estrato_uso_catastro
+
+data <- data %>%
+  mutate(description = str_to_lower(description),
+         description = iconv(description, from = "UTF-8", to = "ASCII//TRANSLIT"),
+         description = str_replace_all(description, "[^[:alnum:]]", " "),
+         description = str_trim(gsub("\\s+", " ", description))
+  )
+
+
+##extraer info de baños##
+
+#primera extraccion#
+data <- data %>%
+  mutate(baño_info= str_extract(description,
+                                "([1-9]|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\\s*(baños?|banos?|ban|baos)\\b"))
+
+#segunda extraccion#por cantidad de menciones de la palabra#
+data <- data %>%
+  mutate(baño_info2 = ifelse(is.na(baño_info), str_extract_all(description, "(bano|baño|baa)|\\b(bao)\\b"), baño_info))
+
+#agregar info que ya tenemos#
+data <- data %>%
+  mutate(baño_info2 = ifelse(is.na(bathrooms), baño_info2, bathrooms))
+
+
+
+
+
+
+#funcion para procesar cada tipo de dato de baño#
+
+
+data$numeros_bañosvec <- if (is.list(data$baño_info2)){lengths(data$baño_info2)}
+
+data <- data %>%
+  mutate(numeros_baños = lapply(baño_info2, function(x) {
+    if (is.character(x)) {
+      return(str_extract(x, "(\\d+|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)"))
+    } else if (is.numeric(x)) {
+      return(x)  # Mantener el número como número
+    } 
+  }))
+data$numeros_baños <- as.character(data$numeros_baños)
+
+
+
+mapeo <- c("uno" = 1, "dos" = 2, "tres" = 3, "cuatro" = 4, "cinco" = 5,
+           "seis"= 6, "siete" = 7, "ocho"= 8, "nueve" = 9, "1" = 1,
+           "2" = 2, "3" = 3, "4" = 4, "5" = 5, "6"= 6,
+           "7" = 7, "8"= 8, "9" = 9)
+
+
+
+
+##Numero de baños con información de la descripcion##
+data$numeros_baños <- mapeo[data$numeros_baños]
+data$numeros_baños <- as.integer(data$numeros_baños)
+
+#agregar la aproximacion por cantidad de menciones de la palabra baño#
+data <- data%>%
+  mutate(numeros_baños = ifelse(is.na(numeros_baños), numeros_bañosvec, numeros_baños))
+
+#poner la media de baños a las observaciones de las cuales no tenemos informacion#
+
+media <- floor(mean(subset(data$numeros_baños, data$numeros_baños != 0)))
+
+data <- data%>%
+  mutate(numeros_baños = ifelse(numeros_baños == 0, media, numeros_baños))
+
+data <- data %>%
+  select(-baño_info, -baño_info2, -numeros_bañosvec)
+
+#guardar datos
+
+setwd("C:/Users/alfag/OneDrive - Universidad de los Andes/Machine learning/taller 2")
+
+
+st_write(inmuebles_estrato_uso_catastro, "TEST_GEOMETRIAS.shp")
+
+data <- st_as_sf(data)
+
+data <- st_drop_geometry(data)
+
+TEST <- as.data.frame(data)
+
+setwd("C:/Users/alfag/OneDrive - Universidad de los Andes/Machine learning/taller 2/estrato")
+
+
+write.csv(TEST, "test-finaaal.csv", row.names = F)

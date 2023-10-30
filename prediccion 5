@@ -1,0 +1,51 @@
+##
+
+fitControl1<-trainControl(method ="cv",
+
+                         number=5) #cantidad de divisiones cross-validation
+
+##
+
+#####Boosting
+
+
+
+set.seed(69)
+
+p_load("bst")
+
+
+
+boosted <- train(
+
+  price~surface_total+bedrooms+numeros_baños+estrato+v_ref+distancia_u_top+distancia_bar+distancia_disco+distancia_w,
+
+  data=train,
+
+  method = "bstTree",
+
+  trControl = fitControl1,
+
+  tuneGrid=expand.grid(
+
+    mstop = c(300), 
+
+    maxdepth = c(3), 
+
+    nu = c(0.001)) 
+
+)
+
+
+
+test$price <- predict(boosted, newdata = test)
+
+
+
+prediccion9 <- test[, c("property_id", "price")]
+
+
+
+setwd("C:/Users/alfag/OneDrive - Universidad de los Andes/Machine learning/taller 2/estrato")
+
+write.csv(prediccion9, "predict9.csv", row.names = F)

@@ -1010,7 +1010,7 @@ view(Precio_tot_MD31000)
 Zeros_MD31000<-ifelse(Precio_compra_MD31000==0,TRUE, FALSE)
 table(Zeros_MD31000)#La cantidad de falsos (diferente de cero) son las propiedades compradas
 
-#De acuerdo a la comparación de los modelos, el modelo MD3_forest con 8 ariables explicativas es el cual tiene la mejor proporción de dinero invertido/viviendas comparas. 
+#De acuerdo a la comparación de los modelos, el modelo MD3_forest con 8 variables explicativas es el cual tiene la mejor proporción de dinero invertido/viviendas comparas. 
 #Por lo tanto, Se realiza la predicción con el modelo MD3_forest en la base BTEST_P 
 
 Predicciones_Precios1 <- predict(MD3_forest1000,  data = BTEST_P)$predictions #Se realiza predicción sobre la base Test con el modelo RF de 1000 árboles
